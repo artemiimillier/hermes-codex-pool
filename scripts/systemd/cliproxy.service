@@ -1,0 +1,16 @@
+# user-юнит: ~/.config/systemd/user/cliproxy.service
+# systemctl --user daemon-reload && systemctl --user enable --now cliproxy
+# loginctl enable-linger $USER  — чтобы жил без активной сессии
+[Unit]
+Description=CLIProxyAPI — pool of ChatGPT/Claude subscriptions (loopback :8317)
+After=network-online.target
+
+[Service]
+Environment=HOME=%h
+WorkingDirectory=%h/.hermes/cliproxy
+ExecStart=%h/.hermes/cliproxy/cli-proxy-api --config %h/.hermes/cliproxy/config.yaml
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

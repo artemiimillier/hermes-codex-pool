@@ -1,0 +1,57 @@
+# CLIProxyAPI — пул подписок ChatGPT/Claude под одним локальным шлюзом.
+# Полный справочник полей: config.example.yaml в репозитории CLIProxyAPI.
+# Плейсхолдеры __CLIENT_KEY__ / __MGMT_KEY__ / __AUTH_DIR__ заменяет скилл при установке.
+
+host: "127.0.0.1"   # только loopback, наружу не светим
+port: 8317
+
+remote-management:
+  allow-remote: false
+  secret-key: "__MGMT_KEY__"     # management API; шлюз сам захеширует в bcrypt при старте
+  disable-control-panel: true    # веб-панель авторов не качаем и не отдаём
+
+auth-dir: "__AUTH_DIR__"
+
+# Клиентский ключ: им ходят Hermes / Codex CLI / Claude Code → шлюз
+api-keys:
+  - "__CLIENT_KEY__"
+
+debug: false
+usage-statistics-enabled: true
+logging-to-file: true
+logs-max-total-size-mb: 500
+error-logs-max-files: 10
+
+# Ретраи и охлаждение аккаунтов
+request-retry: 3
+max-retry-credentials: 5         # = число аккаунтов в пуле
+max-retry-interval: 30
+disable-cooling: false
+save-cooldown-status: true       # cooldown переживает рестарт шлюза
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: true
+
+routing:
+  strategy: "round-robin"        # равномерный износ аккаунтов
+  session-affinity: true         # один разговор не скачет между аккаунтами (кэш промптов)
+  session-affinity-ttl: "1h"
+  session-affinity-subagents: true
+
+codex:
+  identity-confuse: true         # per-auth remap prompt_cache_key при ротации
+  disable-codex-cloaking: false  # выглядим как официальный codex_cli_rs
+
+# Короткие списки моделей для клиентов: пикер Hermes видит только нужное.
+# Wildcards: prefix-* / *-substr-*. Подправьте под свой план.
+oauth-excluded-models:
+  claude:
+    - "claude-3-*"
+    - "*-2025*"
+    - "claude-opus-4-*"
+    - "claude-sonnet-4-*"
+    - "claude-haiku-*"
+  codex:
+    - "gpt-image-*"
+    - "codex-auto-review"
+    - "gpt-5.4*"

@@ -1,0 +1,10 @@
+#!/command/with-contenv sh
+# CLIProxyAPI — пул подписок, порт 8317 (loopback).
+# Скилл подставляет __HERMES_HOME__ и __USER__ при установке.
+set -e
+export HOME=__HERMES_HOME__
+cd __HERMES_HOME__/cliproxy
+if [ "$(id -u)" = 0 ]; then
+  exec s6-setuidgid __USER__ __HERMES_HOME__/cliproxy/cli-proxy-api --config __HERMES_HOME__/cliproxy/config.yaml
+fi
+exec __HERMES_HOME__/cliproxy/cli-proxy-api --config __HERMES_HOME__/cliproxy/config.yaml

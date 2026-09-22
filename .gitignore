@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.log
+auths/
+*.json
+!package.json
+config.yaml
+*.cds
+cli-proxy-api
+cli-proxy-api.*
+backups/
+.env
