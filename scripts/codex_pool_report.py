@@ -7,14 +7,16 @@
   python3 codex_pool_report.py          — полный отчёт
   python3 codex_pool_report.py --alerts — только проблемы (пусто = всё ок)
 Env: CLIPROXY_AUTH_DIR (default $HERMES_HOME/cliproxy/auths, HERMES_HOME default ~/.hermes),
-     REPORT_TZ_OFFSET_HOURS (default 3 = МСК).
+     REPORT_TZ_OFFSET_HOURS (по умолчанию — часовой пояс сервера; например 3 = МСК).
+Токены только читает: ничего не обновляет и не переписывает.
 """
 import json, sys, urllib.request, urllib.error, glob, os, time
 from datetime import datetime, timezone, timedelta
 
 HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
 AUTH_DIR = os.environ.get("CLIPROXY_AUTH_DIR", os.path.join(HERMES_HOME, "cliproxy", "auths"))
-MSK = timezone(timedelta(hours=float(os.environ.get("REPORT_TZ_OFFSET_HOURS", "3"))))
+_TZ_OFFSET = os.environ.get("REPORT_TZ_OFFSET_HOURS")
+TZ = timezone(timedelta(hours=float(_TZ_OFFSET))) if _TZ_OFFSET else datetime.now().astimezone().tzinfo
 UA = "codex_cli_rs/0.76.0"
 
 
@@ -47,8 +49,8 @@ def fetch_claude_usage(access_token: str) -> dict:
 def fmt_reset(reset_at) -> str:
     if not reset_at:
         return "—"
-    dt = datetime.fromtimestamp(reset_at, tz=MSK)
-    now = datetime.now(tz=MSK)
+    dt = datetime.fromtimestamp(reset_at, tz=TZ)
+    now = datetime.now(tz=TZ)
     secs = (dt - now).total_seconds()
     if secs <= 0:
         return "сейчас"
@@ -65,6 +67,37 @@ def window_str(w) -> str:
     days = (w.get("limit_window_seconds") or 0) / 86400
     label = "нед" if days >= 6.5 else ("5ч" if (w.get("limit_window_seconds") or 0) <= 20000 else f"{days:.0f}д")
     return f"{label} {used}% (ресет {fmt_reset(w.get('reset_at'))})"
+
+
+def utilization_pct(value) -> float:
+    """Процент окна Claude. API отдаёт то проценты (42.0), то долю (0.42) — как в Hermes,
+    значения не больше 1 считаем долей."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return 0.0
+    return float(value) * 100 if value <= 1 else float(value)
+
+
+def token_expired_for_good(d: dict) -> bool:
+    """401 бывает и тогда, когда шлюз просто ещё не успел обновить короткий access-токен.
+    Перелогин нужен, только если истёк срок refresh-токена (поле expired auth-файла)."""
+    raw = d.get("expired")
+    if not raw:
+        return True
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt <= datetime.now(timezone.utc)
+
+
+def unauthorized_alert(name: str, d: dict, kind: str) -> str:
+    who = f"{name} ({kind})" if kind else name
+    if token_expired_for_good(d):
+        hint = "перелогин claude в пуле" if kind == "claude" else "перелогин codex-пул"
+        return f"🚨 {who}: вход истёк — нужен перелогин (скажи агенту «{hint}»)"
+    return f"⚠️ {who}: токен ещё не обновлён шлюзом — обычно проходит само; повторится завтра — нужен перелогин"
 
 
 def short_email(email: str) -> str:
@@ -99,7 +132,7 @@ def main():
             u = fetch_claude_usage(d["access_token"])
         except urllib.error.HTTPError as e:
             if e.code == 401:
-                alerts.append(f"🚨 {name} (claude): токен протух — нужен перелогин (скажи агенту «перелогин claude в пуле»)")
+                alerts.append(unauthorized_alert(name, d, "claude"))
             else:
                 alerts.append(f"⚠️ {name} (claude): не смог прочитать квоту (HTTP {e.code})")
             continue
@@ -113,7 +146,7 @@ def main():
         for key, label in (("five_hour", "5ч"), ("seven_day", "нед")):
             w = u.get(key)
             if w:
-                util = w.get("utilization") or 0.0
+                util = utilization_pct(w.get("utilization"))
                 worst = max(worst, util)
                 ra = w.get("resets_at")
                 reset_unix = None
@@ -149,7 +182,7 @@ def main():
             u = fetch_usage(d["access_token"], d.get("account_id", ""))
         except urllib.error.HTTPError as e:
             if e.code == 401:
-                alerts.append(f"🚨 {name}: токен протух/отозван — нужен перелогин (скажи агенту «перелогин codex-пул»)")
+                alerts.append(unauthorized_alert(name, d, ""))
             else:
                 alerts.append(f"⚠️ {name}: не смог прочитать квоту (HTTP {e.code})")
             continue
@@ -188,7 +221,7 @@ def main():
             print("\n".join(alerts))
         return
 
-    now = datetime.now(tz=MSK)
+    now = datetime.now(tz=TZ)
     out = [f"📊 Модель-пул · {now.strftime('%d.%m %H:%M')} ", ""]
     out.extend(lines)
     out.append("")

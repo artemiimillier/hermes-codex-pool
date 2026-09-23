@@ -1,6 +1,19 @@
+Hermes Codex Pool
+Copyright (c) 2026 Artemii Miller. Лицензия MIT — см. LICENSE.
+
+Этот репозиторий — обвязка вокруг CLIProxyAPI: инструкция для агента, конфиг,
+скрипты обслуживания. Кода самого шлюза здесь нет — скилл скачивает оригинальный
+исходник у авторов и собирает его на сервере пользователя.
+
+CLIProxyAPI — https://github.com/router-for-me/CLIProxyAPI
+Лицензия MIT; текст ниже — из репозитория авторов (версия v7.3.15).
+
+----------------------------------------------------------------------
+
 MIT License
 
-Copyright (c) 2026 Artemii Miller
+Copyright (c) 2025-2005.9 Luis Pater
+Copyright (c) 2025.9-present Router-For.ME
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

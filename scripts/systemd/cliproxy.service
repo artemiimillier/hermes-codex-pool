@@ -8,7 +8,8 @@ After=network-online.target
 [Service]
 Environment=HOME=%h
 WorkingDirectory=%h/.hermes/cliproxy
-ExecStart=%h/.hermes/cliproxy/cli-proxy-api --config %h/.hermes/cliproxy/config.yaml
+# --local-model: модели из собранной версии, без каталогов с серверов авторов
+ExecStart=%h/.hermes/cliproxy/cli-proxy-api --config %h/.hermes/cliproxy/config.yaml --local-model
 Restart=always
 RestartSec=3
 

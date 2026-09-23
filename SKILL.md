@@ -1,7 +1,7 @@
 ---
 name: hermes-codex-pool
 description: "Шлюз подписок Claude/ChatGPT/Kimi для Hermes: пул аккаунтов, CLIProxyAPI."
-version: 1.1.0
+version: 1.2.0
 author: artemiimillier
 license: MIT
 platforms: [linux]
@@ -47,7 +47,8 @@ OpenAI/Anthropic — риск ограничения аккаунтов нену
 | Сущность | Значение |
 |---|---|
 | `HERMES_HOME` | `~/.hermes` (проверь: `echo $HERMES_HOME`; в контейнерах часто другое) |
-| Каталог шлюза | `$HERMES_HOME/cliproxy/` — бинарь, `config.yaml`, `auths/`, `logs/`, `VERSION`, `client.key` |
+| Каталог шлюза | `$HERMES_HOME/cliproxy/` — бинарь, `config.yaml`, `auths/`, `logs/`, `src/` (исходник), `VERSION`, `client.key` |
+| Одобренная версия шлюза | `$RAW/scripts/cliproxy-approved.txt` — тег и точный коммит; ставим и обновляемся ТОЛЬКО на неё |
 | Скрипты | `$HERMES_HOME/scripts/` |
 | s6-сервис | `$HERMES_HOME/s6-services/cliproxy/run` → живое `/run/service/cliproxy` |
 | systemd | `~/.config/systemd/user/cliproxy.service` |
@@ -57,46 +58,51 @@ OpenAI/Anthropic — риск ограничения аккаунтов нену
 
 ### 1. Собери шлюз из исходников (root не нужен)
 
-Не бери релизный бинарь: шлюз держит OAuth-токены аккаунтов, собираем сами
-по пинованному тегу.
+Не бери релизный бинарь: шлюз держит OAuth-токены аккаунтов. Собираем сами из
+исходника ОДОБРЕННОЙ версии (`cliproxy-approved.txt`: тег + точный коммит).
 
 ```bash
 export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
-mkdir -p "$HERMES_HOME/cliproxy/auths" "$HERMES_HOME/scripts" && chmod 700 "$HERMES_HOME/cliproxy/auths"
-# Go: если в системе нет — ставим официальный архив в ~/go (root не нужен).
-# GOPATH держим отдельно от GOROOT.
-if ! command -v go >/dev/null 2>&1 && [ ! -x "$HOME/go/bin/go" ]; then
-  GOV=$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1)
-  GOARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-  curl -fsSL "https://go.dev/dl/$GOV.linux-$GOARCH.tar.gz" | tar -C "$HOME" -xz
-fi
+# logs/ создаём заранее: иначе шлюз пишет логи ВНУТРЬ auths/ — к токенам и в бэкап
+mkdir -p "$HERMES_HOME/cliproxy/auths" "$HERMES_HOME/cliproxy/logs" "$HERMES_HOME/scripts" && chmod 700 "$HERMES_HOME/cliproxy/auths"
+cd "$HERMES_HOME/scripts"
+for f in install_go.sh cliproxy_audit_hosts.sh cliproxy-known-hosts.txt cliproxy-approved.txt; do
+  curl -fsSL "$RAW/scripts/$f" -o "$f"
+done
+chmod +x install_go.sh cliproxy_audit_hosts.sh
+# Go: официальный архив в ~/go с проверкой SHA-256 по go.dev (root не нужен);
+# если Go уже есть — ничего не делает. GOPATH держим отдельно от GOROOT.
+sh ./install_go.sh
 export GOPATH=$HOME/gopath; export PATH=$HOME/go/bin:$GOPATH/bin:$PATH
 go version
-# Последний релизный тег шлюза
-TAG=$(git ls-remote --tags --refs --sort=-v:refname https://github.com/router-for-me/CLIProxyAPI 'v*' | head -1 | sed 's#.*refs/tags/##')
-echo "CLIProxyAPI $TAG"
-# Исходник кладём в ПОСТОЯННУЮ папку: $TMPDIR на серверах часто пуст (тогда путь
-# превратится в /cliproxy-src и клон упадёт), а для аудита diff при обновлении
-# дерево нужно сохранить.
+TAG=$(sed -n 's/^tag=//p' cliproxy-approved.txt); COMMIT=$(sed -n 's/^commit=//p' cliproxy-approved.txt)
+echo "CLIProxyAPI $TAG (одобренная)"
+# Исходник — в ПОСТОЯННУЮ папку: $TMPDIR на серверах часто пуст (путь превратился бы
+# в /cliproxy-src), а для аудита при обновлении дерево нужно сохранить.
 SRC="$HERMES_HOME/cliproxy/src"
-rm -rf "$SRC" && git clone -q --depth 1 --branch "$TAG" https://github.com/router-for-me/CLIProxyAPI "$SRC"
+rm -rf "$SRC" && git -c advice.detachedHead=false clone -q --depth 1 --branch "$TAG" https://github.com/router-for-me/CLIProxyAPI "$SRC"
 cd "$SRC"
-# аудит: на какие домены бинарь может ходить (тесты не считаем)
-grep -rhoE 'https?://[a-zA-Z0-9.-]+' --include=*.go --exclude=*_test.go . | sort -u
+if [ "$(git rev-parse HEAD)" = "$COMMIT" ]; then echo "коммит $TAG совпал с одобренным"; else echo "СТОП: тег $TAG указывает не на одобренный коммит"; fi
+# аудит сети: печатает только адреса, которых нет в эталоне; пустой вывод = ок
+sh "$HERMES_HOME/scripts/cliproxy_audit_hosts.sh" "$SRC"
 go build -trimpath -ldflags "-s -w" -o "$HERMES_HOME/cliproxy/cli-proxy-api" ./cmd/server/
 echo "$TAG" > "$HERMES_HOME/cliproxy/VERSION"
 ```
 
+Две остановки, после которых НЕ продолжай, а покажи пользователю вывод:
+- `СТОП: тег … указывает не на одобренный коммит` — тег у авторов перевесили на
+  другой код. Не собирай.
+- аудит вывел «Незнакомые адреса…» — в исходнике появились сетевые адреса, которых
+  нет в эталоне `cliproxy-known-hosts.txt` (там все адреса одобренной версии,
+  разложенные по назначению). Собирай только с явного согласия пользователя.
+
 Сборка идёт 3–10 минут (Go сам докачает нужный toolchain и зависимости) —
 запускай фоном с уведомлением, а не в коротком таймауте.
 
-Ожидаемые домены — API и OAuth самих провайдеров (`chatgpt.com`,
-`auth.openai.com`, `api.anthropic.com`, `claude.ai`, `platform.claude.com`,
-`*.googleapis.com`, `api.kimi.com`, `api.x.ai` и т.п.), `github.com` /
-`api.github.com` (проверка обновлений), сервисы определения IP (`ifconfig.me`,
-`ipinfo.io`), домены авторов `*.router-for.me` (панель — её выключает
-`disable-control-panel: true`) и примеры из документации (`example.com`).
-Незнакомый домен вне этих групп — покажи пользователю до запуска.
+Свежее одобренной (последний релиз у авторов) ставь, только если пользователь
+прямо попросил: тогда вместо `TAG`/`COMMIT` из файла возьми последний релиз
+(`git ls-remote --tags --refs --sort=-v:refname https://github.com/router-for-me/CLIProxyAPI 'v*' | head -1`),
+а всё, что выдаст аудит, покажи ему до сборки.
 
 ### 2. Конфиг
 
@@ -110,7 +116,8 @@ printf '%s' "$CLIENT_KEY" > client.key
 chmod 600 config.yaml client.key
 ```
 
-`max-retry-credentials` поставь равным числу аккаунтов. Секрет management-ключа
+`max-retry-credentials: 0` — шлюз пробует все аккаунты пула; при добавлении
+аккаунтов ничего менять не нужно. Секрет management-ключа
 шлюз при старте перепишет в bcrypt (`$2a$...`) — это норма, не «порча файла».
 Не печатай ключи в чат.
 
@@ -137,11 +144,16 @@ systemctl --user daemon-reload && systemctl --user enable --now cliproxy && logi
 
 Нет ни s6, ни systemd (например, обычный Docker-контейнер без супервизора) —
 запусти шлюз фоновым процессом агента из `$HERMES_HOME/cliproxy`:
-`./cli-proxy-api --config config.yaml` и поставь крон-сторож из шага 7.
+`./cli-proxy-api --config config.yaml --local-model` и поставь крон-сторож из шага 7.
 
 Проверка: `curl -s 127.0.0.1:8317/healthz` → `{"status":"ok"}`, а
 `curl -s -H "Authorization: Bearer $(cat $HERMES_HOME/cliproxy/client.key)" 127.0.0.1:8317/v1/models`
 → `{"data":[],...}` (список пуст, пока нет ни одного аккаунта — это норма).
+
+Шлюз запускается с флагом `--local-model`: список моделей берётся вшитый в
+собранную версию, а не скачивается с серверов авторов каждые 3 часа. Новые модели
+появляются вместе с обновлением шлюза до новой одобренной версии. Нужна модель
+раньше — убери флаг из run-файла (или юнита) и перезапусти шлюз.
 
 ### 4. Вход в аккаунты (по одному)
 
@@ -215,6 +227,9 @@ hermes config set providers.pool.name pool
 hermes config set providers.pool.base_url http://127.0.0.1:8317/v1
 hermes config set providers.pool.api_key "$KEY"
 hermes config set providers.pool.api_mode chat_completions
+# тот же ключ — в переменную окружения Hermes (.env): её читают плагин-провайдер
+# `pool` (порядок моделей, ниже) и `claude-pool`
+hermes config set CLIPROXY_KEY "$KEY"
 # какие модели реально есть у вошедших аккаунтов:
 curl -s -H "Authorization: Bearer $(cat $HERMES_HOME/cliproxy/client.key)" 127.0.0.1:8317/v1/models | grep -o '"id":"[^"]*"'
 ```
@@ -344,7 +359,7 @@ $HERMES_HOME/scripts/claude-pool.sh && chmod +x ...`; запуск `claude-pool`
 
 ```bash
 cd $HERMES_HOME/scripts
-for f in codex_pool_report.py codex_pool_alerts.sh codex_pool_backup.sh cliproxy-watchdog.sh cliproxy_update_check.py; do
+for f in codex_pool_report.py codex_pool_alerts.sh codex_pool_backup.sh cliproxy-watchdog.sh cliproxy_update_check.py cliproxy_audit_hosts.sh cliproxy-known-hosts.txt cliproxy-approved.txt install_go.sh; do
   curl -fsSL $RAW/scripts/$f -o $f && chmod +x $f
 done
 ```
@@ -355,17 +370,17 @@ done
 
 | Имя | Расписание | Скрипт | Смысл |
 |---|---|---|---|
-| `cliproxy-watchdog` | каждые 13 мин | `cliproxy-watchdog.sh` | поднять шлюз после падения/пересоздания контейнера |
+| `cliproxy-watchdog` | каждые 2 мин | `cliproxy-watchdog.sh` | поднять шлюз после падения/пересоздания контейнера: другого автозапуска в контейнере нет, так что простой — не больше 2–3 минут |
 | `codex-pool-morning` | 1 раз утром | `codex_pool_report.py` | квоты и ресеты по каждому аккаунту |
 | `codex-pool-alerts` | 1 раз утром | `codex_pool_alerts.sh` | только проблемы: все в лимите / 401 / окно >90% |
-| `codex-pool-backup` | ночью | `codex_pool_backup.sh` | tar.gz токенов, ротация 14 |
-| `cliproxy-update-check` | раз в неделю | `cliproxy_update_check.py` | новый релиз шлюза → сообщение |
+| `codex-pool-backup` | ночью | `codex_pool_backup.sh` | tar.gz токенов, хранятся 3 последние копии |
+| `cliproxy-update-check` | раз в неделю | `cliproxy_update_check.py` | в репозитории скилла одобрена новая версия шлюза → сообщение |
 
 Создать все пять (`--deliver` — куда слать: `telegram`, `origin`, `local`…;
 время в cron-выражении — по часам сервера, обычно UTC):
 
 ```bash
-hermes cron create "every 13m"   --name cliproxy-watchdog     --script cliproxy-watchdog.sh     --no-agent --deliver telegram
+hermes cron create "every 2m"    --name cliproxy-watchdog     --script cliproxy-watchdog.sh     --no-agent --deliver telegram
 hermes cron create "53 5 * * *"  --name codex-pool-morning    --script codex_pool_report.py     --no-agent --deliver telegram
 hermes cron create "47 5 * * *"  --name codex-pool-alerts     --script codex_pool_alerts.sh     --no-agent --deliver telegram
 hermes cron create "41 3 * * *"  --name codex-pool-backup     --script codex_pool_backup.sh     --no-agent --deliver telegram
@@ -375,23 +390,40 @@ hermes cron create "7 7 * * 1"   --name cliproxy-update-check --script cliproxy_
 Поле `script` крона НЕ принимает аргументов (вся строка = путь) — поэтому есть
 обёртка `codex_pool_alerts.sh`. Алерты чаще раза в сутки — спам; не надо.
 
-## Обновление шлюза — только вручную
+### 8. Кнопка лимитов в Hermes Desktop (опционально)
 
-1. `cd $HERMES_HOME/cliproxy/src && git fetch --depth 1 origin tag vX.Y.Z && git checkout vX.Y.Z`
-   (папки нет — значит ставили старой версией скилла: склонируй заново по шагу 1)
-2. Аудит diff: `git diff <стар>..<нов> | grep -iE 'https?://'` на новые домены.
-3. `go build -trimpath -ldflags "-s -w" -o $HERMES_HOME/cliproxy/cli-proxy-api ./cmd/server/`
-4. `kill <pid>` → сервис перезапустит; `healthz`; настоящий запрос.
-5. Обнови `$HERMES_HOME/cliproxy/VERSION`.
+Плагин [hermes-codex-limits](https://github.com/artemiimillier/hermes-codex-limits)
+показывает остаток по КАЖДОМУ аккаунту пула прямо рядом с выбором модели. Он
+только читает auth-файлы этого пула и ничего в нём не меняет.
 
-Подмена бинаря на ЖИВОМ сервисе: обычный `cp` поверх даёт `Text file busy`.
-Порядок: `mv cli-proxy-api cli-proxy-api.old-<ver>` → `cp` новый → `kill <PID>`.
-PID бери отдельной командой: подстановка `$(pgrep ...)` внутри той же строки
-может поймать твой собственный шелл.
+```bash
+hermes plugins install artemiimillier/hermes-codex-limits --enable
+```
 
-Сборка требует Go той версии, что указана в `go.mod` апстрима (сейчас 1.26).
-Toolchain Go скачает сам, сборка занимает 5–10 минут — запускай её фоном
-с уведомлением, а не в коротком таймауте.
+Интерфейсную часть пользователь ставит у себя в Hermes Desktop: Capabilities →
+Plugins → Install from Git → та же ссылка → отметить Desktop UI. Лимиты пула
+видны сразу, перезапуск Hermes не нужен.
+
+## Обновление шлюза — до одобренной версии, по фразе «обнови пул»
+
+Крон `cliproxy-update-check` сообщает, когда в репозитории скилла одобрена новая
+версия. Обновляйся ИМЕННО на неё:
+
+1. Скачай свежие `cliproxy-approved.txt`, `cliproxy-known-hosts.txt`,
+   `cliproxy_audit_hosts.sh` из `$RAW/scripts/` в `$HERMES_HOME/scripts/`;
+   `TAG`/`COMMIT` — из `cliproxy-approved.txt`.
+2. `cd $HERMES_HOME/cliproxy/src && git fetch --depth 1 origin tag "$TAG" && git checkout "$TAG"`,
+   затем сверь `git rev-parse HEAD` с `COMMIT` (не совпал — СТОП, как в шаге 1).
+   Папки `src` нет — ставили старой версией скилла: склонируй по шагу 1.
+3. Аудит: `sh $HERMES_HOME/scripts/cliproxy_audit_hosts.sh $HERMES_HOME/cliproxy/src` — пусто = ок.
+4. Собери рядом (3–10 минут, фоном): `go build -trimpath -ldflags "-s -w" -o $HERMES_HOME/cliproxy/cli-proxy-api.new ./cmd/server/`
+5. Подмена на ЖИВОМ сервисе (обычный `cp` поверх даёт `Text file busy`):
+   `mv cli-proxy-api cli-proxy-api.old-<старая версия>` → `mv cli-proxy-api.new cli-proxy-api` →
+   `kill <PID>` — s6/systemd поднимет новый. PID бери ОТДЕЛЬНОЙ командой: подстановка
+   `$(pgrep ...)` и `pkill -f` в той же строке могут поймать твой собственный шелл.
+6. Проверка: `healthz`, `/v1/models`, настоящий запрос. Не работает — верни
+   `.old-<версия>` на место и снова `kill <PID>`.
+7. `echo "$TAG" > $HERMES_HOME/cliproxy/VERSION`; старый `.old-*` удали через пару дней.
 
 ### Новая модель есть в `/v1/models`, но запрос к ней падает
 
@@ -440,3 +472,4 @@ strings $HERMES_HOME/cliproxy/cli-proxy-api | grep -o 'claude-cli/[0-9.]*'
 5. `python3 $HERMES_HOME/scripts/codex_pool_report.py` — все аккаунты 🟢 или с понятной причиной.
 6. В Hermes: новый чат (или `/model pool-sonnet`), короткий вопрос → ответ; в логах шлюза виден запрос.
 7. Сервис переживает `kill <pid>` (поднялся сам за ~5 с).
+8. `hermes cron list` — пять кронов пула, сторож `cliproxy-watchdog` — каждые 2 минуты.

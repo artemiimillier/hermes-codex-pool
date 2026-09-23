@@ -12,6 +12,11 @@ remote-management:
 
 auth-dir: "__AUTH_DIR__"
 
+# Плагины шлюза — чужой код внутри процесса с токенами. Выключены (это и так
+# значение по умолчанию; пишем явно, чтобы случайная правка их не включила).
+plugins:
+  enabled: false
+
 # Клиентский ключ: им ходят Hermes / Codex CLI / Claude Code → шлюз
 api-keys:
   - "__CLIENT_KEY__"
@@ -24,7 +29,7 @@ error-logs-max-files: 10
 
 # Ретраи и охлаждение аккаунтов
 request-retry: 3
-max-retry-credentials: 5         # = число аккаунтов в пуле
+max-retry-credentials: 0         # 0 = пробовать все аккаунты пула; при добавлении аккаунтов менять не нужно
 max-retry-interval: 30
 disable-cooling: false
 save-cooldown-status: true       # cooldown переживает рестарт шлюза

@@ -1,0 +1,70 @@
+# Эталон сетевых адресов CLIProxyAPI v7.3.15 (одобренная версия).
+# cliproxy_audit_hosts.sh сравнивает с ним исходник перед сборкой и показывает
+# только новые адреса. Строки с # и пустые игнорируются.
+
+# Работают при нашем конфиге — аккаунты ChatGPT/Codex
+chatgpt.com
+auth.openai.com
+api.openai.com
+platform.openai.com
+
+# Работают при нашем конфиге — аккаунты Claude
+api.anthropic.com
+claude.ai
+console.anthropic.com
+platform.claude.com
+
+# Работает всегда: раз в 6 часов версия клиента Antigravity (флагом не отключается)
+antigravity-hub-auto-updater-974169037036.us-central1.run.app
+
+# Выключено флагом --local-model: каталоги моделей от авторов каждые 3 часа
+raw.githubusercontent.com
+models.router-for.me
+
+# Выключено конфигом (disable-control-panel, plugins.enabled: false): веб-панель и магазин плагинов
+api.github.com
+cpamc.router-for.me
+github.com
+
+# Только если добавить аккаунты Google / Gemini / Antigravity
+accounts.google.com
+oauth2.googleapis.com
+www.googleapis.com
+cloudcode-pa.googleapis.com
+daily-cloudcode-pa.googleapis.com
+daily-cloudcode-pa.sandbox.googleapis.com
+generativelanguage.googleapis.com
+aiplatform.googleapis.com
+
+# Только если добавить аккаунты xAI / Grok
+api.x.ai
+auth.x.ai
+cli-chat-proxy.grok.com
+
+# Только если добавить аккаунты Kimi
+api.kimi.ai
+api.kimi.com
+auth.kimi.ai
+auth.kimi.com
+platform.kimi.ai
+
+# Только если добавить аккаунты Devin / Meta / Codeium
+api.devin.ai
+app.devin.ai
+api.meta.ai
+auth.meta.com
+server.codeium.com
+
+# Только для функции SSH-туннеля шлюза (определение внешнего IP)
+api.ipify.org
+icanhazip.com
+ifconfig.me
+ipinfo.io
+
+# Ссылки в текстах, подсказках и схемах запросов
+developers.openai.com
+docs.anthropic.com
+api-docs.deepseek.com
+openrouter.ai
+json-schema.org
+www.w3.org

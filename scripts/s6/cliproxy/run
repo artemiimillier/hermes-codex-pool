@@ -1,10 +1,12 @@
 #!/command/with-contenv sh
 # CLIProxyAPI — пул подписок, порт 8317 (loopback).
 # Скилл подставляет __HERMES_HOME__ и __USER__ при установке.
+# --local-model: список моделей — вшитый в собранную версию, без скачивания
+# каталогов с серверов авторов каждые 3 часа.
 set -e
 export HOME=__HERMES_HOME__
 cd __HERMES_HOME__/cliproxy
 if [ "$(id -u)" = 0 ]; then
-  exec s6-setuidgid __USER__ __HERMES_HOME__/cliproxy/cli-proxy-api --config __HERMES_HOME__/cliproxy/config.yaml
+  exec s6-setuidgid __USER__ __HERMES_HOME__/cliproxy/cli-proxy-api --config __HERMES_HOME__/cliproxy/config.yaml --local-model
 fi
-exec __HERMES_HOME__/cliproxy/cli-proxy-api --config __HERMES_HOME__/cliproxy/config.yaml
+exec __HERMES_HOME__/cliproxy/cli-proxy-api --config __HERMES_HOME__/cliproxy/config.yaml --local-model
