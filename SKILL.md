@@ -1,6 +1,6 @@
 ---
 name: hermes-codex-pool
-description: "Пул подписок ChatGPT/Claude под одним шлюзом CLIProxyAPI для Hermes."
+description: "Пул подписок ChatGPT/Claude/Kimi под одним шлюзом CLIProxyAPI для Hermes."
 version: 1.0.0
 author: artemiimillier
 license: MIT
@@ -190,18 +190,55 @@ hermes config set model_aliases.pool-opus.provider pool
 
 **Порядок моделей в списке.** `/v1/models` отдаёт модели в порядке обхода
 map внутри шлюза — он случайный и меняется от рестарта к рестарту, конфигом
-не управляется. Читаемый порядок в пикере задаётся ТОЛЬКО порядком ключей
-в `model_aliases`. Менять его надо целиком, одной командой — поключевой
-`hermes config set` дописывает новый алиас в конец:
+шлюза не управляется. Порядком `model_aliases` это НЕ чинится: алиасы — это
+короткие имена для `/model <имя>`, на список в пикере они не влияют вообще.
+
+Чтобы задать порядок, нужен плагин-провайдер: его курируемый список идёт в
+пикере ПЕРЕД живым, а модели, которых в списке нет, дописываются следом —
+новая модель в шлюзе не потеряется. Создайте два файла:
+
+`$HERMES_HOME/plugins/model-providers/pool/plugin.yaml`
+
+```yaml
+name: pool-provider
+kind: model-provider
+version: 1.0.0
+description: Единый пул подписок с фиксированным порядком моделей
+```
+
+`$HERMES_HOME/plugins/model-providers/pool/__init__.py`
+
+```python
+from providers import register_provider
+from providers.base import ProviderProfile
+
+# Порядок строк = порядок в пикере. Менять только здесь.
+POOL_MODELS = (
+    "claude-sonnet-5", "claude-opus-5",      # сначала одна семья,
+    "gpt-6-astra", "gpt-5.6-sol",            # потом другая — не вперемешку
+)
+
+register_provider(ProviderProfile(
+    name="pool",
+    display_name="Pool",
+    api_mode="chat_completions",
+    auth_type="api_key",
+    base_url="http://127.0.0.1:8317/v1",
+    env_vars=("CLIPROXY_KEY",),
+    fallback_models=POOL_MODELS,
+    supports_prompt_cache_key=True,
+))
+```
+
+Подставьте свои модели — `curl` к `/v1/models` покажет доступные. Проверка:
 
 ```bash
-hermes config set --force model_aliases '{
-  "pool-sonnet": {"model":"claude-sonnet-5","provider":"pool"},
-  "pool-opus":   {"model":"claude-opus-5","provider":"pool"},
-  "pool-astra":  {"model":"gpt-6-astra","provider":"pool"},
-  "pool-sol":    {"model":"gpt-5.6-sol","provider":"pool"}
-}'
+hermes model --refresh
 ```
+
+Команда сбрасывает кэш пикера и показывает список — модели пула должны идти
+ровно в том порядке, что задан в `POOL_MODELS`. Плагин подхватывается при
+следующем старте Hermes; перезапускать шлюз не нужно.
 
 Кроны Hermes: `hermes cron edit <job_id> --provider pool --model <модель>` —
 тогда они не встают, когда один аккаунт в лимите. Проверка: `/model pool-astra`.
@@ -221,10 +258,11 @@ requires_openai_auth = false
 experimental_bearer_token = "<ключ из client.key>"
 ```
 
-Claude Code на моделях GPT: `curl -fsSL $RAW/scripts/claude-pool.sh -o
+Claude Code через пул: `curl -fsSL $RAW/scripts/claude-pool.sh -o
 $HERMES_HOME/scripts/claude-pool.sh && chmod +x ...`; запуск `claude-pool`,
-модель через `CLAUDE_POOL_MODEL=...`. Предупреждение Claude Code «unknown
-model» безобидно.
+модель через `CLAUDE_POOL_MODEL=...` — принимаются и `claude-*`, и `gpt-*`,
+и любые другие модели из `/v1/models` вашего пула. Предупреждение Claude Code
+«unknown model» на не-Anthropic моделях безобидно.
 
 ### 7. Скрипты и кроны Hermes
 
