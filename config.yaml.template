@@ -55,3 +55,13 @@ oauth-excluded-models:
     - "gpt-image-*"
     - "codex-auto-review"
     - "gpt-5.4*"
+
+# Подписка, которая выдаёт не OAuth, а обычный API-ключ (например Kimi).
+# Попадает в ТОТ ЖЕ единственный пул. Раскомментируйте и подставьте свой ключ.
+# Имена моделей апстрима сначала узнайте: GET <base-url>/v1/models с этим ключом.
+# claude-api-key:
+#   - api-key: "<ключ вашей подписки>"
+#     base-url: "https://api.example.com/coding"
+#     models:
+#       - name: "upstream-model-id"   # как называет апстрим
+#         alias: "short-name"         # как зовут клиенты

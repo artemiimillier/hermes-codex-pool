@@ -129,6 +129,26 @@ cd $HERMES_HOME/cliproxy && ./cli-proxy-api --config config.yaml --codex-device-
 надо; пользователь копирует ПОЛНЫЙ адрес, ты подаёшь его в stdin процесса
 СРАЗУ (процесс ждёт ввод ~3-4 минуты и умирает).
 
+**Подписка по API-ключу (Kimi и подобные, опционально).** Не всякая подписка
+логинится по OAuth: некоторые дают обычный ключ. Такой аккаунт кладётся не в
+`auths/`, а блоком `claude-api-key:` в `config.yaml` шлюза — и попадает в тот
+же единственный пул. Для не-Anthropic апстрима задай `base-url` и ЯВНЫЙ список
+моделей с алиасами (иначе клиенты не узнают, как их звать):
+
+```yaml
+claude-api-key:
+  - api-key: "<ключ подписки>"
+    base-url: "https://api.example.com/coding"   # апстрим провайдера
+    models:
+      - name: "upstream-model-id"   # как называет апстрим
+        alias: "short-name"         # как зовут клиенты
+```
+
+Список моделей апстрима сначала узнай запросом `GET <base-url>/v1/models` с этим
+же ключом — не угадывай имена. После правки конфига перезапусти шлюз и проверь
+`/v1/models` и настоящий запрос. Флаги `--kimi-login` / `--kimi-ai-login` — это
+ДРУГОЙ, OAuth-вариант; для ключа они не нужны.
+
 ### 5. Подключи Hermes
 
 Только через `hermes config set` (прямая правка config.yaml может быть
@@ -136,26 +156,55 @@ cd $HERMES_HOME/cliproxy && ./cli-proxy-api --config config.yaml --codex-device-
 
 ```bash
 KEY=$(cat $HERMES_HOME/cliproxy/client.key)
-hermes config set providers.codexpool.name codexpool
-hermes config set providers.codexpool.base_url http://127.0.0.1:8317/v1
-hermes config set providers.codexpool.api_key "$KEY"
-hermes config set providers.codexpool.api_mode chat_completions
-hermes config set providers.codexpool.default_model gpt-5.6-sol
-# алиасы — по списку из curl -s -H "Authorization: Bearer $KEY" 127.0.0.1:8317/v1/models
+hermes config set providers.pool.name pool
+hermes config set providers.pool.base_url http://127.0.0.1:8317/v1
+hermes config set providers.pool.api_key "$KEY"
+hermes config set providers.pool.api_mode chat_completions
+hermes config set providers.pool.default_model gpt-5.6-sol
+# алиасы — по списку из curl -s -H "Authorization: Bearer ***" 127.0.0.1:8317/v1/models
 hermes config set model_aliases.pool-sol.model gpt-5.6-sol
-hermes config set model_aliases.pool-sol.provider codexpool
+hermes config set model_aliases.pool-sol.provider pool
 hermes config set model_aliases.pool-astra.model gpt-6-astra
-hermes config set model_aliases.pool-astra.provider codexpool
+hermes config set model_aliases.pool-astra.provider pool
 ```
 Предупреждение «not a recognized config key» для `model_aliases` — норма.
 
-Если есть Claude-аккаунты — второй провайдер `claudepool`:
-`base_url http://127.0.0.1:8317` (БЕЗ `/v1`), `api_mode anthropic_messages`,
-алиасы `pool-sonnet` / `pool-opus`. Имена провайдеров держи именно
-`codexpool` / `claudepool` — их ждут скрипты и отчёты.
+**Провайдер нужен РОВНО ОДИН — `pool`.** Аккаунты ChatGPT/Codex и аккаунты
+Claude и так живут в одном шлюзе (один auth-dir, одна ротация), а дверь
+`chat_completions` обслуживает ОБЕ семьи моделей: tool-calls, поле
+`reasoning_content` и prompt-кэш работают и для `claude-*`, и для `gpt-*`.
+Заводить второй провайдер под Anthropic-протокол не надо — это дублирование
+одного и того же пула. Есть Claude-аккаунты — просто добавь их алиасы к тому
+же провайдеру:
 
-Кроны Hermes: pin `provider: codexpool` + модель из алиаса — тогда они не
-встают, когда один аккаунт в лимите. Проверка в чате: `/model pool-astra`.
+```bash
+hermes config set model_aliases.pool-sonnet.model claude-sonnet-5
+hermes config set model_aliases.pool-sonnet.provider pool
+hermes config set model_aliases.pool-opus.model claude-opus-5
+hermes config set model_aliases.pool-opus.provider pool
+```
+
+Если какому-то стороннему скрипту нужна именно Anthropic Messages-дверь
+(`POST /v1/messages`) — пусть резолвит тот же `pool` и сам срезает `/v1`
+с `base_url`; отдельный провайдер ради этого не заводится.
+
+**Порядок моделей в списке.** `/v1/models` отдаёт модели в порядке обхода
+map внутри шлюза — он случайный и меняется от рестарта к рестарту, конфигом
+не управляется. Читаемый порядок в пикере задаётся ТОЛЬКО порядком ключей
+в `model_aliases`. Менять его надо целиком, одной командой — поключевой
+`hermes config set` дописывает новый алиас в конец:
+
+```bash
+hermes config set --force model_aliases '{
+  "pool-sonnet": {"model":"claude-sonnet-5","provider":"pool"},
+  "pool-opus":   {"model":"claude-opus-5","provider":"pool"},
+  "pool-astra":  {"model":"gpt-6-astra","provider":"pool"},
+  "pool-sol":    {"model":"gpt-5.6-sol","provider":"pool"}
+}'
+```
+
+Кроны Hermes: `hermes cron edit <job_id> --provider pool --model <модель>` —
+тогда они не встают, когда один аккаунт в лимите. Проверка: `/model pool-astra`.
 
 ### 6. Codex CLI и Claude Code (опционально)
 
@@ -209,6 +258,26 @@ done
 4. `kill <pid>` → сервис перезапустит; `healthz`; настоящий запрос.
 5. Обнови `$HERMES_HOME/cliproxy/VERSION`.
 
+Подмена бинаря на ЖИВОМ сервисе: обычный `cp` поверх даёт `Text file busy`.
+Порядок: `mv cli-proxy-api cli-proxy-api.old-<ver>` → `cp` новый → `kill <PID>`.
+PID бери отдельной командой: подстановка `$(pgrep ...)` внутри той же строки
+может поймать твой собственный шелл.
+
+Сборка требует Go той версии, что указана в `go.mod` апстрима (сейчас 1.26).
+Toolchain Go скачает сам, сборка занимает 5–10 минут — запускай её фоном
+с уведомлением, а не в коротком таймауте.
+
+### Новая модель есть в `/v1/models`, но запрос к ней падает
+
+Симптом: `Claude Code X does not support this model; version Y or newer is
+required`. Это НЕ конфиг и НЕ фильтры моделей: апстрим проверяет User-Agent
+`claude-cli/<версия>`, вшитый в бинарь шлюза. Лечится ТОЛЬКО обновлением
+CLIProxyAPI до релиза, где подняли baseline. Проверить, что вшито сейчас:
+
+```bash
+strings $HERMES_HOME/cliproxy/cli-proxy-api | grep -o 'claude-cli/[0-9.]*'
+```
+
 ## Как это работает (объясни пользователю по-простому)
 
 - Аккаунты крутятся по кругу, но один разговор держится на одном аккаунте
@@ -229,8 +298,10 @@ done
 - Список моделей для клиентов режется в `oauth-excluded-models` (wildcards
   `prefix-*`, `*-substr-*`). После правки — рестарт, проверка `/v1/models`.
   Пикер Hermes Desktop может держать старый кэш — переоткрыть настройки.
-- Hermes-провайдер `codexpool` объявлен как `chat_completions`, но шлюз
-  обслуживает и Responses API — Codex CLI ходит по `wire_api = "responses"`.
+- Hermes-провайдер `pool` объявлен как `chat_completions`, но шлюз обслуживает
+  и Responses API, и Anthropic Messages — Codex CLI ходит по
+  `wire_api = "responses"`, а `claude-pool` — по `/v1/messages`. Это ОДИН пул;
+  второй провайдер ради другого протокола не заводится.
 - PTY-сессии могут не видеть `codex`/`claude` в PATH — используй абсолютные пути.
 - Никогда не печатай в чат содержимое `auths/*.json`, `config.yaml`, `client.key`.
 

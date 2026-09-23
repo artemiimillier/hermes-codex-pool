@@ -1,8 +1,10 @@
 #!/bin/sh
-# claude-pool — Claude Code поверх пула (CLIProxyAPI :8317), модели GPT.
+# claude-pool — Claude Code поверх пула (CLIProxyAPI :8317).
+# Пул один: в нём и аккаунты ChatGPT/Codex, и аккаунты Claude — поэтому
+# CLAUDE_POOL_MODEL принимает и claude-*, и gpt-* модели из /v1/models.
 # Ключ шлюза читается из env CLIPROXY_KEY или из файла $HERMES_HOME/cliproxy/client.key.
 # Примеры:  claude-pool -p "разбери PR"
-#           CLAUDE_POOL_MODEL=gpt-5.6-terra claude-pool
+#           CLAUDE_POOL_MODEL=gpt-6-astra claude-pool
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 KEY="${CLIPROXY_KEY:-}"
 [ -z "$KEY" ] && [ -f "$HERMES_HOME/cliproxy/client.key" ] && KEY=$(cat "$HERMES_HOME/cliproxy/client.key")
