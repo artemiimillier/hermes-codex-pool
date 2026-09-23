@@ -65,8 +65,12 @@ mkdir -p $HERMES_HOME/cliproxy/auths $HERMES_HOME/scripts && chmod 700 $HERMES_H
 # Go: если нет — скачай tarball в ~/go (GOPATH держи отдельно от GOROOT)
 export GOPATH=$HOME/gopath; export PATH=$HOME/go/bin:$GOPATH/bin:$PATH
 TAG=$(curl -s https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | python3 -c 'import sys,json;print(json.load(sys.stdin)["tag_name"])')
-git clone --depth 1 --branch $TAG https://github.com/router-for-me/CLIProxyAPI $TMPDIR/cliproxy-src
-cd $TMPDIR/cliproxy-src
+# Исходник кладём в ПОСТОЯННУЮ папку: $TMPDIR на серверах часто пуст (тогда путь
+# превратится в /cliproxy-src и клон упадёт), а для аудита diff при обновлении
+# дерево нужно сохранить.
+SRC="$HERMES_HOME/cliproxy/src"
+rm -rf "$SRC" && git clone --depth 1 --branch $TAG https://github.com/router-for-me/CLIProxyAPI "$SRC"
+cd "$SRC"
 # аудит: куда бинарь может ходить в сеть
 grep -rhoE 'https?://[a-zA-Z0-9./_-]+' --include=*.go . | sort -u
 go build -trimpath -ldflags "-s -w" -o $HERMES_HOME/cliproxy/cli-proxy-api ./cmd/server/
@@ -304,7 +308,8 @@ done
 
 ## Обновление шлюза — только вручную
 
-1. `git fetch --depth 1 origin tag vX.Y.Z && git checkout vX.Y.Z`
+1. `cd $HERMES_HOME/cliproxy/src && git fetch --depth 1 origin tag vX.Y.Z && git checkout vX.Y.Z`
+   (папки нет — значит ставили старой версией скилла: склонируй заново по шагу 1)
 2. Аудит diff: `git diff <стар>..<нов> | grep -iE 'https?://'` на новые домены.
 3. `go build -trimpath -ldflags "-s -w" -o $HERMES_HOME/cliproxy/cli-proxy-api ./cmd/server/`
 4. `kill <pid>` → сервис перезапустит; `healthz`; настоящий запрос.
