@@ -21,6 +21,11 @@ session-affinity), охлаждает упёршиеся в лимит, ретр
 
 Файлы этого репозитория: `https://raw.githubusercontent.com/artemiimillier/hermes-codex-pool/main/`
 (далее `$RAW`). Установка тянет только SKILL.md — остальное качай по `$RAW/...`.
+Задай переменную в начале работы, иначе команды с `curl` получат пустой URL:
+
+```bash
+export RAW=https://raw.githubusercontent.com/artemiimillier/hermes-codex-pool/main
+```
 
 ## ⚠️ ОБЯЗАТЕЛЬНО предупреди пользователя один раз
 
@@ -230,15 +235,24 @@ register_provider(ProviderProfile(
 ))
 ```
 
-Подставьте свои модели — `curl` к `/v1/models` покажет доступные. Проверка:
+Подставьте свои модели — `curl` к `/v1/models` покажет доступные. Проверка
+порядка (работает и в скрипте; `hermes model` для этого не годится — он
+требует живой терминал и в пайпе падает):
 
 ```bash
-hermes model --refresh
+HERMES_PY=$(for c in \
+    "$(dirname "$(readlink -f "$(command -v hermes)")")/python3" \
+    "$HERMES_HOME/.venv/bin/python3" \
+    "$HOME/.hermes/.venv/bin/python3"; do
+  [ -x "$c" ] && "$c" -c 'import hermes_cli' 2>/dev/null && { echo "$c"; break; }
+done)
+"$HERMES_PY" -c "from hermes_cli.models import provider_model_ids
+for m in provider_model_ids('pool', force_refresh=True): print(m)"
 ```
 
-Команда сбрасывает кэш пикера и показывает список — модели пула должны идти
-ровно в том порядке, что задан в `POOL_MODELS`. Плагин подхватывается при
-следующем старте Hermes; перезапускать шлюз не нужно.
+Модели должны выйти ровно в том порядке, что задан в `POOL_MODELS`. Плагин
+подхватывается при следующем старте Hermes; перезапускать шлюз не нужно.
+В интерактивном терминале тот же список можно увидеть через `hermes model`.
 
 Кроны Hermes: `hermes cron edit <job_id> --provider pool --model <модель>` —
 тогда они не встают, когда один аккаунт в лимите. Проверка: `/model pool-astra`.
