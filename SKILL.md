@@ -1,7 +1,7 @@
 ---
 name: hermes-codex-pool
-description: "Пул подписок ChatGPT/Claude/Kimi под одним шлюзом CLIProxyAPI для Hermes."
-version: 1.0.0
+description: "Шлюз подписок Claude/ChatGPT/Kimi для Hermes: пул аккаунтов, CLIProxyAPI."
+version: 1.1.0
 author: artemiimillier
 license: MIT
 platforms: [linux]
@@ -13,9 +13,10 @@ metadata:
 
 # Hermes Codex Pool (CLIProxyAPI)
 
-Несколько подписок ChatGPT (и опционально Claude Pro/Max) → один локальный шлюз
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) на `127.0.0.1:8317` →
-Hermes / Codex CLI / Claude Code. Шлюз ротирует аккаунты (round-robin +
+Подписки Claude Pro/Max, ChatGPT Plus/Pro и Kimi (одна или несколько) → один
+локальный шлюз [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) на
+`127.0.0.1:8317` → Hermes / Codex CLI / Claude Code. Хватает и одного аккаунта
+Claude — тогда это просто «шлюз подписки Claude для Hermes». Шлюз ротирует аккаунты (round-robin +
 session-affinity), охлаждает упёршиеся в лимит, ретраит 429/5xx. Ручного
 переключения аккаунтов нигде не нужно.
 
@@ -36,8 +37,8 @@ OpenAI/Anthropic — риск ограничения аккаунтов нену
 
 ## Когда применять
 
-- Пользователь хочет, чтобы Hermes/кроны работали «по подписке ChatGPT», и у него
-  2+ аккаунта.
+- Пользователь хочет, чтобы Hermes работал по своей подписке Claude Pro/Max
+  и/или ChatGPT (одной или нескольких), а не по платному API-ключу.
 - Один аккаунт постоянно упирается в недельный лимит и работа встаёт.
 - Пересобрать/починить шлюз после пересоздания контейнера.
 
@@ -61,25 +62,41 @@ OpenAI/Anthropic — риск ограничения аккаунтов нену
 
 ```bash
 export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
-mkdir -p $HERMES_HOME/cliproxy/auths $HERMES_HOME/scripts && chmod 700 $HERMES_HOME/cliproxy/auths
-# Go: если нет — скачай tarball в ~/go (GOPATH держи отдельно от GOROOT)
+mkdir -p "$HERMES_HOME/cliproxy/auths" "$HERMES_HOME/scripts" && chmod 700 "$HERMES_HOME/cliproxy/auths"
+# Go: если в системе нет — ставим официальный архив в ~/go (root не нужен).
+# GOPATH держим отдельно от GOROOT.
+if ! command -v go >/dev/null 2>&1 && [ ! -x "$HOME/go/bin/go" ]; then
+  GOV=$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1)
+  GOARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+  curl -fsSL "https://go.dev/dl/$GOV.linux-$GOARCH.tar.gz" | tar -C "$HOME" -xz
+fi
 export GOPATH=$HOME/gopath; export PATH=$HOME/go/bin:$GOPATH/bin:$PATH
-TAG=$(curl -s https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | python3 -c 'import sys,json;print(json.load(sys.stdin)["tag_name"])')
+go version
+# Последний релизный тег шлюза
+TAG=$(git ls-remote --tags --refs --sort=-v:refname https://github.com/router-for-me/CLIProxyAPI 'v*' | head -1 | sed 's#.*refs/tags/##')
+echo "CLIProxyAPI $TAG"
 # Исходник кладём в ПОСТОЯННУЮ папку: $TMPDIR на серверах часто пуст (тогда путь
 # превратится в /cliproxy-src и клон упадёт), а для аудита diff при обновлении
 # дерево нужно сохранить.
 SRC="$HERMES_HOME/cliproxy/src"
-rm -rf "$SRC" && git clone --depth 1 --branch $TAG https://github.com/router-for-me/CLIProxyAPI "$SRC"
+rm -rf "$SRC" && git clone -q --depth 1 --branch "$TAG" https://github.com/router-for-me/CLIProxyAPI "$SRC"
 cd "$SRC"
-# аудит: куда бинарь может ходить в сеть
-grep -rhoE 'https?://[a-zA-Z0-9./_-]+' --include=*.go . | sort -u
-go build -trimpath -ldflags "-s -w" -o $HERMES_HOME/cliproxy/cli-proxy-api ./cmd/server/
-echo "$TAG" > $HERMES_HOME/cliproxy/VERSION
+# аудит: на какие домены бинарь может ходить (тесты не считаем)
+grep -rhoE 'https?://[a-zA-Z0-9.-]+' --include=*.go --exclude=*_test.go . | sort -u
+go build -trimpath -ldflags "-s -w" -o "$HERMES_HOME/cliproxy/cli-proxy-api" ./cmd/server/
+echo "$TAG" > "$HERMES_HOME/cliproxy/VERSION"
 ```
 
-Ожидаемые домены: `chatgpt.com`, `auth.openai.com`, `api.anthropic.com`,
-`claude.ai`, `*.googleapis.com`, `github.com`. Незнакомый домен — покажи
-пользователю до запуска.
+Сборка идёт 3–10 минут (Go сам докачает нужный toolchain и зависимости) —
+запускай фоном с уведомлением, а не в коротком таймауте.
+
+Ожидаемые домены — API и OAuth самих провайдеров (`chatgpt.com`,
+`auth.openai.com`, `api.anthropic.com`, `claude.ai`, `platform.claude.com`,
+`*.googleapis.com`, `api.kimi.com`, `api.x.ai` и т.п.), `github.com` /
+`api.github.com` (проверка обновлений), сервисы определения IP (`ifconfig.me`,
+`ipinfo.io`), домены авторов `*.router-for.me` (панель — её выключает
+`disable-control-panel: true`) и примеры из документации (`example.com`).
+Незнакомый домен вне этих групп — покажи пользователю до запуска.
 
 ### 2. Конфиг
 
@@ -114,29 +131,58 @@ cp -r $HERMES_HOME/s6-services/cliproxy /run/service/cliproxy && /command/s6-svs
 ```bash
 mkdir -p ~/.config/systemd/user
 curl -fsSL $RAW/scripts/systemd/cliproxy.service -o ~/.config/systemd/user/cliproxy.service
-# если HERMES_HOME ≠ ~/.hermes — поправь пути в юните
+sed -i "s|%h/.hermes|$HERMES_HOME|g" ~/.config/systemd/user/cliproxy.service
 systemctl --user daemon-reload && systemctl --user enable --now cliproxy && loginctl enable-linger $USER
 ```
 
-Проверка: `curl -s 127.0.0.1:8317/healthz` → `{"status":"ok"}`.
+Нет ни s6, ни systemd (например, обычный Docker-контейнер без супервизора) —
+запусти шлюз фоновым процессом агента из `$HERMES_HOME/cliproxy`:
+`./cli-proxy-api --config config.yaml` и поставь крон-сторож из шага 7.
 
-### 4. Логин в аккаунты ChatGPT (device-code, по одному)
+Проверка: `curl -s 127.0.0.1:8317/healthz` → `{"status":"ok"}`, а
+`curl -s -H "Authorization: Bearer $(cat $HERMES_HOME/cliproxy/client.key)" 127.0.0.1:8317/v1/models`
+→ `{"data":[],...}` (список пуст, пока нет ни одного аккаунта — это норма).
+
+### 4. Вход в аккаунты (по одному)
+
+Шлюз подхватывает новые аккаунты без рестарта. Аккаунтов может быть сколько
+угодно, в любой комбинации: только Claude, только ChatGPT или оба.
+
+#### Claude Pro/Max
+
+```bash
+cd $HERMES_HOME/cliproxy && ./cli-proxy-api --config config.yaml --claude-login --no-browser
+```
+
+Запусти фоновым PTY-процессом (процесс ждёт ввод ~3–4 минуты и умирает —
+всё делай быстро). Шлюз напечатает подсказку про `ssh -L ...` — её
+пользователю НЕ показывай, туннель не нужен. Нужна только длинная ссылка
+`https://claude.ai/oauth/authorize?...` из строки «Visit the following URL».
+Пользователю, пошагово:
+
+1. Открой ссылку в браузере, войди в НУЖНЫЙ аккаунт Claude, нажми **Authorize**.
+2. Браузер перейдёт на `http://localhost:54545/callback?code=...&state=...` и
+   покажет ошибку «не удаётся открыть страницу» — так и должно быть.
+3. Скопируй из адресной строки ВЕСЬ адрес и пришли мне.
+
+Как только адрес пришёл — сразу подай его в stdin процесса (строка
+`Paste the Claude callback URL`). `state` в адресе должен совпасть со ссылкой
+этого же запуска, иначе `ErrInvalidState` — тогда просто запусти вход заново.
+Готово, когда в `auths/` появился `claude-<email>.json`. Следующий аккаунт
+Claude — тем же способом (в браузере сначала выйти из Claude или инкогнито).
+
+#### ChatGPT Plus/Pro (device-code)
 
 ```bash
 cd $HERMES_HOME/cliproxy && ./cli-proxy-api --config config.yaml --codex-device-login
 ```
-Запусти фоновым PTY-процессом, вытащи из вывода URL
-`https://auth.openai.com/oauth/device?user_code=XXXX-XXXX` и код, отдай
-пользователю пошагово: открыть → войти в НУЖНЫЙ аккаунт → подтвердить код.
+Запусти фоновым PTY-процессом, вытащи из вывода строки `Codex device URL:`
+(`https://auth.openai.com/codex/device`) и `Codex device code:` (`XXXX-XXXX`),
+отдай пользователю пошагово: открыть ссылку → войти в НУЖНЫЙ аккаунт ChatGPT →
+ввести код.
 Код живёт 15 минут; истёк — запусти заново. Auth-файл `auths/codex-<id>-<email>.json`
 появится сам; шлюз подхватывает новые файлы без рестарта. Повтори для каждого
 аккаунта (пользователю: инкогнито или выйти из ChatGPT между логинами).
-
-**Claude Pro/Max (опционально):** `--claude-login`. Другой флоу: отдай
-пользователю длинный URL `claude.ai/oauth/authorize?...`; после Authorize
-браузер упадёт на `http://localhost:54545/callback?code=...&state=...` — так и
-надо; пользователь копирует ПОЛНЫЙ адрес, ты подаёшь его в stdin процесса
-СРАЗУ (процесс ждёт ввод ~3-4 минуты и умирает).
 
 **Подписка по API-ключу (Kimi и подобные, опционально).** Не всякая подписка
 логинится по OAuth: некоторые дают обычный ключ. Такой аккаунт кладётся не в
@@ -169,14 +215,26 @@ hermes config set providers.pool.name pool
 hermes config set providers.pool.base_url http://127.0.0.1:8317/v1
 hermes config set providers.pool.api_key "$KEY"
 hermes config set providers.pool.api_mode chat_completions
-hermes config set providers.pool.default_model gpt-5.6-sol
-# алиасы — по списку из curl -s -H "Authorization: Bearer ***" 127.0.0.1:8317/v1/models
-hermes config set model_aliases.pool-sol.model gpt-5.6-sol
-hermes config set model_aliases.pool-sol.provider pool
-hermes config set model_aliases.pool-astra.model gpt-6-astra
-hermes config set model_aliases.pool-astra.provider pool
+# какие модели реально есть у вошедших аккаунтов:
+curl -s -H "Authorization: Bearer $(cat $HERMES_HOME/cliproxy/client.key)" 127.0.0.1:8317/v1/models | grep -o '"id":"[^"]*"'
+```
+
+Выбери модель по умолчанию ИЗ ЭТОГО СПИСКА (имена ниже — примеры, у разных
+тарифов и версий шлюза они отличаются). Пусть `MODEL` — выбранное имя:
+
+```bash
+MODEL=claude-sonnet-5        # или gpt-..., что есть в списке выше
+hermes config set providers.pool.default_model "$MODEL"
+# сделать пул основной моделью Hermes (без этого Hermes остаётся на старом провайдере):
+hermes config set model.provider pool
+hermes config set model.base_url http://127.0.0.1:8317/v1
+hermes config set model.default "$MODEL"
+# короткие имена для /model — по одному на каждую нужную модель из списка:
+hermes config set model_aliases.pool-sonnet.model claude-sonnet-5
+hermes config set model_aliases.pool-sonnet.provider pool
 ```
 Предупреждение «not a recognized config key» для `model_aliases` — норма.
+Уже открытые чаты остаются на прежней модели — новый чат или `/model pool-sonnet`.
 
 **Провайдер нужен РОВНО ОДИН — `pool`.** Аккаунты ChatGPT/Codex и аккаунты
 Claude и так живут в одном шлюзе (один auth-dir, одна ротация), а дверь
@@ -184,11 +242,11 @@ Claude и так живут в одном шлюзе (один auth-dir, одн�
 `reasoning_content` и prompt-кэш работают и для `claude-*`, и для `gpt-*`.
 Заводить второй провайдер под Anthropic-протокол не надо — это дублирование
 одного и того же пула. Есть Claude-аккаунты — просто добавь их алиасы к тому
-же провайдеру:
+же провайдеру (пример для ChatGPT; имена — из `/v1/models`):
 
 ```bash
-hermes config set model_aliases.pool-sonnet.model claude-sonnet-5
-hermes config set model_aliases.pool-sonnet.provider pool
+hermes config set model_aliases.pool-astra.model gpt-6-astra
+hermes config set model_aliases.pool-astra.provider pool
 hermes config set model_aliases.pool-opus.model claude-opus-5
 hermes config set model_aliases.pool-opus.provider pool
 ```
@@ -259,7 +317,7 @@ for m in provider_model_ids('pool', force_refresh=True): print(m)"
 В интерактивном терминале тот же список можно увидеть через `hermes model`.
 
 Кроны Hermes: `hermes cron edit <job_id> --provider pool --model <модель>` —
-тогда они не встают, когда один аккаунт в лимите. Проверка: `/model pool-astra`.
+тогда они не встают, когда один аккаунт в лимите. Проверка: `/model pool-sonnet`.
 
 ### 6. Codex CLI и Claude Code (опционально)
 
@@ -302,6 +360,17 @@ done
 | `codex-pool-alerts` | 1 раз утром | `codex_pool_alerts.sh` | только проблемы: все в лимите / 401 / окно >90% |
 | `codex-pool-backup` | ночью | `codex_pool_backup.sh` | tar.gz токенов, ротация 14 |
 | `cliproxy-update-check` | раз в неделю | `cliproxy_update_check.py` | новый релиз шлюза → сообщение |
+
+Создать все пять (`--deliver` — куда слать: `telegram`, `origin`, `local`…;
+время в cron-выражении — по часам сервера, обычно UTC):
+
+```bash
+hermes cron create "every 13m"   --name cliproxy-watchdog     --script cliproxy-watchdog.sh     --no-agent --deliver telegram
+hermes cron create "53 5 * * *"  --name codex-pool-morning    --script codex_pool_report.py     --no-agent --deliver telegram
+hermes cron create "47 5 * * *"  --name codex-pool-alerts     --script codex_pool_alerts.sh     --no-agent --deliver telegram
+hermes cron create "41 3 * * *"  --name codex-pool-backup     --script codex_pool_backup.sh     --no-agent --deliver telegram
+hermes cron create "7 7 * * 1"   --name cliproxy-update-check --script cliproxy_update_check.py --no-agent --deliver telegram
+```
 
 Поле `script` крона НЕ принимает аргументов (вся строка = путь) — поэтому есть
 обёртка `codex_pool_alerts.sh`. Алерты чаще раза в сутки — спам; не надо.
@@ -365,9 +434,9 @@ strings $HERMES_HOME/cliproxy/cli-proxy-api | grep -o 'claude-cli/[0-9.]*'
 ## Чеклист самопроверки (не рапортуй «готово» без него)
 
 1. `curl -s 127.0.0.1:8317/healthz` → `{"status":"ok"}`.
-2. `ls $HERMES_HOME/cliproxy/auths/codex-*.json | wc -l` = число аккаунтов.
+2. `ls $HERMES_HOME/cliproxy/auths/ | grep -cE '^(codex|claude)-.*\.json$'` = число вошедших аккаунтов.
 3. `curl -s -H "Authorization: Bearer $(cat $HERMES_HOME/cliproxy/client.key)" 127.0.0.1:8317/v1/models` — нужные модели есть.
-4. Настоящий запрос: `curl -s 127.0.0.1:8317/v1/chat/completions -H "Authorization: Bearer <key>" -H 'Content-Type: application/json' -d '{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"скажи ok"}]}'` → ответ с текстом.
+4. Настоящий запрос: `curl -s 127.0.0.1:8317/v1/chat/completions -H "Authorization: Bearer <key>" -H 'Content-Type: application/json' -d '{"model":"<модель из /v1/models>","messages":[{"role":"user","content":"скажи ok"}]}'` → ответ с текстом.
 5. `python3 $HERMES_HOME/scripts/codex_pool_report.py` — все аккаунты 🟢 или с понятной причиной.
-6. В Hermes: `/model pool-sol`, короткий вопрос → ответ; в логах шлюза виден запрос.
+6. В Hermes: новый чат (или `/model pool-sonnet`), короткий вопрос → ответ; в логах шлюза виден запрос.
 7. Сервис переживает `kill <pid>` (поднялся сам за ~5 с).
